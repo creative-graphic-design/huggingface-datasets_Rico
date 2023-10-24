@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "huggingface-datasets-rico"
+version = "0.1.0"
+description = ""
+authors = ["Shunsuke KITADA <shunsuke.kitada.0831@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+datasets = {extras = ["vision"], version = "^2.14.6"}
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.1.1"
+black = "^23.10.1"
+mypy = "^1.6.1"
+pytest = "^7.4.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
