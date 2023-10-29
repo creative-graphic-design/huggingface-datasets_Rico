@@ -179,10 +179,7 @@ class UiComponent(object):
             to_snake_case(k.replace("-", "_")): v for k, v in json_dict.items()
         }
         json_dict["klass"] = json_dict.pop("class")
-        try:
-            return cls(**json_dict)
-        except:
-            breakpoint()
+        return cls(**json_dict)
 
 
 @dataclass
@@ -309,32 +306,32 @@ class UiLayoutVectorsProcessor(RicoTaskProcessor):
         return ds.Features()
 
     def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
-        breakpoint()
+        raise NotImplementedError
 
     def generate_examples(self, samples: List[Any]):
-        breakpoint()
+        raise NotImplementedError
 
 
 class InteractionTracesProcessor(RicoTaskProcessor):
     def get_features(self) -> ds.Features:
-        breakpoint()
+        raise NotImplementedError
 
     def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
-        breakpoint()
+        raise NotImplementedError
 
     def generate_examples(self, samples: List[Any]):
-        breakpoint()
+        raise NotImplementedError
 
 
 class AnimationsProcessor(RicoTaskProcessor):
     def get_features(self) -> ds.Features:
-        breakpoint()
+        raise NotImplementedError
 
     def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
-        breakpoint()
+        raise NotImplementedError
 
     def generate_examples(self, samples: List[Any]):
-        breakpoint()
+        raise NotImplementedError
 
 
 class UiScreenshotsAndHierarchiesWithSemanticAnnotationsProcessor(RicoTaskProcessor):
@@ -342,7 +339,36 @@ class UiScreenshotsAndHierarchiesWithSemanticAnnotationsProcessor(RicoTaskProces
         ui_component = {
             "ancestors": ds.Sequence(ds.Value("string")),
             "bounds": ds.Sequence(ds.Value("int64")),
-            "component_label": ds.Value("string"),
+            "component_label": ds.ClassLabel(
+                num_classes=25,
+                names=[
+                    "Text",
+                    "Image",
+                    "Icon",
+                    "Text Button",
+                    "List Item",
+                    "Input",
+                    "Background Image",
+                    "Card",
+                    "Web View",
+                    "Radio Button",
+                    "Drawer",
+                    "Checkbox",
+                    "Advertisement",
+                    "Modal",
+                    "Pager Indicator",
+                    "Slider",
+                    "On/Off Switch",
+                    "Button Bar",
+                    "Toolbar",
+                    "Number Stepper",
+                    "Multi-Tab",
+                    "Date Picker",
+                    "Map View",
+                    "Video",
+                    "Bottom Navigation",
+                ],
+            ),
             "clickable": ds.Value("bool"),
             "klass": ds.Value("string"),
             "icon_class": ds.Value("string"),
@@ -447,6 +473,7 @@ class RicoDataset(ds.GeneratorBasedBuilder):
 
     def _split_generators(self, dl_manager: ds.DownloadManager):
         task_base_dir = dl_manager.download_and_extract(self.config.data_url)
+
         metadata_files = dl_manager.download_and_extract(_METADATA_URLS["metadata"])
 
         processor: RicoTaskProcessor = self.config.processor
