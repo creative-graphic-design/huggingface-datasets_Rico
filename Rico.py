@@ -8,25 +8,40 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import datasets as ds
+import numpy as np
+import pandas as pd
+from datasets.utils.logging import get_logger
 from PIL import Image
 from PIL.Image import Image as PilImage
 
+logger = get_logger(__name__)
+
 JsonDict = Dict[str, Any]
 
-_DESCRIPTION = ""
+_DESCRIPTION = """
+THE DATASET: We mined over 9.3k free Android apps from 27 categories to create the Rico dataset. Apps in the dataset had an average user rating of 4.1. The Rico dataset contains visual, textual, structural, and interactive design properties of more than 66k unique UI screens and 3M UI elements.
+"""
 
-_CITATION = ""
-
-_HOMEPAGE = ""
-
-_LICENSE = ""
-
-_METADATA_URLS = {
-    "metadata": {
-        "ui-metadata": "https://storage.googleapis.com/crowdstf-rico-uiuc-4540/rico_dataset_v0.1/ui_details.csv",
-        "play-store-bmetadata": "https://storage.googleapis.com/crowdstf-rico-uiuc-4540/rico_dataset_v0.1/app_details.csv",
-    },
+_CITATION = """\
+@inproceedings{deka2017rico,
+  title={Rico: A mobile app dataset for building data-driven design applications},
+  author={Deka, Biplab and Huang, Zifeng and Franzen, Chad and Hibschman, Joshua and Afergan, Daniel and Li, Yang and Nichols, Jeffrey and Kumar, Ranjitha},
+  booktitle={Proceedings of the 30th annual ACM symposium on user interface software and technology},
+  pages={845--854},
+  year={2017}
 }
+"""
+
+_HOMEPAGE = "http://www.interactionmining.org/rico.html"
+
+_LICENSE = "Unknown"
+
+# _METADATA_URLS = {
+#     "metadata": {
+#         "ui-metadata": ,
+#         "play-store-metadata": "",
+#     },
+# }
 
 
 def to_snake_case(name):
@@ -42,9 +57,32 @@ class TrainValidationTestSplit(TypedDict):
     test: List[Any]
 
 
+class UiLayoutVectorSample(TypedDict):
+    vector: np.ndarray
+    name: str
+
+
 @dataclass(eq=True)
-class RicoTaskProcessor(object, metaclass=abc.ABCMeta):
-    def flatten_children(
+class RicoProcessor(object, metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def get_features(self) -> ds.Features:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def load_examples(self, *args, **kwargs) -> List[Any]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def split_generators(self, *args, **kwargs) -> List[ds.SplitGenerator]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def generate_examples(self, examples: List[Any]):
+        raise NotImplementedError
+
+
+class RicoTaskProcessor(RicoProcessor):
+    def _flatten_children(
         self,
         children,
         children_id: Optional[str] = None,
@@ -63,7 +101,7 @@ class RicoTaskProcessor(object, metaclass=abc.ABCMeta):
             if "children" not in child:
                 continue
 
-            result = self.flatten_children(
+            result = self._flatten_children(
                 children=child.pop("children"),
                 children_id=children_id + 1,
                 result=result,
@@ -73,60 +111,88 @@ class RicoTaskProcessor(object, metaclass=abc.ABCMeta):
 
         return result
 
-    def load_image(self, file_path: pathlib.Path) -> PilImage:
+    def _load_image(self, file_path: pathlib.Path) -> PilImage:
         return Image.open(file_path)
 
-    def split_dataset(
+    def _split_dataset(
         self,
-        samples: List[Any],
+        examples: List[Any],
         train_ratio: float,
         validation_ratio: float,
         test_ratio: float,
     ) -> TrainValidationTestSplit:
         assert train_ratio + validation_ratio + test_ratio == 1.0
-        num_samples = len(samples)
+        num_examples = len(examples)
 
-        num_tng = math.ceil(num_samples * train_ratio)  # type: ignore
-        num_val = math.ceil(num_samples * validation_ratio)  # type: ignore
-        num_tst = math.ceil(num_samples * test_ratio)  # type: ignore
+        num_tng = math.ceil(num_examples * train_ratio)  # type: ignore
+        num_val = math.ceil(num_examples * validation_ratio)  # type: ignore
+        num_tst = math.ceil(num_examples * test_ratio)  # type: ignore
 
-        tng_samples = samples[:num_tng]
-        val_samples = samples[num_tng : num_tng + num_val]
-        tst_samples = samples[num_tng + num_val : num_tng + num_val + num_tst]
-        assert len(tng_samples) + len(val_samples) + len(tst_samples) == num_samples
+        tng_examples = examples[:num_tng]
+        val_examples = examples[num_tng : num_tng + num_val]
+        tst_examples = examples[num_tng + num_val : num_tng + num_val + num_tst]
+        assert len(tng_examples) + len(val_examples) + len(tst_examples) == num_examples
 
         return {
-            "train": tng_samples,
-            "validation": val_samples,
-            "test": tst_samples,
+            "train": tng_examples,
+            "validation": val_examples,
+            "test": tst_examples,
         }
 
-    def load_and_split_dataset(
+    def _load_and_split_dataset(
         self,
         base_dir: pathlib.Path,
         train_ratio: float,
         validation_ratio: float,
         test_ratio: float,
     ) -> TrainValidationTestSplit:
-        samples = self.load_samples(base_dir=base_dir)
-        return self.split_dataset(
-            samples=samples,
+        examples = self.load_examples(base_dir)
+        return self._split_dataset(
+            examples=examples,
             train_ratio=train_ratio,
             validation_ratio=validation_ratio,
             test_ratio=test_ratio,
         )
 
-    @abc.abstractmethod
-    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
-        raise NotImplementedError
+    def split_generators(
+        self,
+        base_dir: pathlib.Path,
+        train_ratio: float,
+        validation_ratio: float,
+        test_ratio: float,
+    ) -> List[ds.SplitGenerator]:
+        split_examples = self._load_and_split_dataset(
+            base_dir=pathlib.Path(base_dir),
+            train_ratio=train_ratio,
+            validation_ratio=validation_ratio,
+            test_ratio=test_ratio,
+        )
 
-    @abc.abstractmethod
-    def get_features(self) -> ds.Features:
-        raise NotImplementedError
+        return [
+            ds.SplitGenerator(
+                name=ds.Split.TRAIN,  # type: ignore
+                gen_kwargs={"examples": split_examples["train"]},
+            ),
+            ds.SplitGenerator(
+                name=ds.Split.VALIDATION,  # type: ignore
+                gen_kwargs={"examples": split_examples["validation"]},
+            ),
+            ds.SplitGenerator(
+                name=ds.Split.TEST,  # type: ignore
+                gen_kwargs={"examples": split_examples["test"]},
+            ),
+        ]
 
-    @abc.abstractmethod
-    def generate_examples(self, samples: List[Any]):
-        raise NotImplementedError
+    def load_examples(self, base_dir: pathlib.Path) -> List[Any]:
+        return super().load_examples(base_dir=base_dir)
+
+
+class RicoMetadataProcessor(RicoProcessor):
+    def load_examples(self, csv_file: pathlib.Path) -> List[Any]:
+        return super().load_examples(csv_file=csv_file)
+
+    def split_generators(self, csv_file: pathlib.Path) -> List[ds.SplitGenerator]:
+        return super().split_generators(csv_file=csv_file)
 
 
 @dataclass
@@ -203,11 +269,21 @@ class Activity(object):
 
 
 @dataclass
-class UiScreenshotsAndViewHierarchiesData(object):
+class InteractionTracesData(object):
     activity_name: str
     activity: Activity
     is_keyboard_deployed: str
     request_id: str
+
+    @classmethod
+    def from_dict(cls, json_dict: JsonDict) -> "InteractionTracesData":
+        activity_dict = json_dict.pop("activity")
+        activity = Activity.from_dict(activity_dict)
+        return cls(activity=activity, **json_dict)
+
+
+@dataclass
+class UiScreenshotsAndViewHierarchiesData(object):
     screenshot: PilImage
 
     @classmethod
@@ -238,9 +314,9 @@ class UiScreenshotsAndHierarchiesWithSemanticAnnotationsData(object):
         return cls(children=children, **json_dict)
 
 
-class UiScreenshotsAndViewHierarchiesProcessor(RicoTaskProcessor):
-    def get_features(self) -> ds.Features:
-        activity_class = {
+class InteractionTracesProcessor(RicoTaskProcessor):
+    def get_activity_class_features_dict(self):
+        return {
             "abs_pos": ds.Value("bool"),
             "adapter_view": ds.Value("bool"),
             "ancestors": ds.Sequence(ds.Value("string")),
@@ -249,8 +325,8 @@ class UiScreenshotsAndViewHierarchiesProcessor(RicoTaskProcessor):
             "content_desc": ds.Sequence(ds.Value("string")),
             "draw": ds.Value("bool"),
             "enabled": ds.Value("bool"),
-            "focused": ds.Value("bool"),
             "focusable": ds.Value("bool"),
+            "focused": ds.Value("bool"),
             "klass": ds.Value("string"),
             "long_clickable": ds.Value("bool"),
             "package": ds.Value("string"),
@@ -264,36 +340,105 @@ class UiScreenshotsAndViewHierarchiesProcessor(RicoTaskProcessor):
             "visibility": ds.Value("string"),
             "visible_to_user": ds.Value("bool"),
         }
-        features = ds.Features(
+
+    def get_activity_features_dict(self, activity_class):
+        return {
+            "activity_name": ds.Value("string"),
+            "activity": {
+                "root": activity_class,
+                "children": ds.Sequence(ds.Sequence(activity_class)),
+                "added_fragments": ds.Sequence(ds.Value("string")),
+                "active_fragments": ds.Sequence(ds.Value("string")),
+            },
+            "is_keyboard_deployed": ds.Value("bool"),
+            "request_id": ds.Value("string"),
+        }
+
+    def get_features(self) -> ds.Features:
+        activity_class = self.get_activity_class_features_dict()
+        activity = self.get_activity_features_dict(activity_class)
+        return ds.Features(
             {
-                "activity_name": ds.Value("string"),
-                "screenshot": ds.Image(),
-                "activity": {
-                    "root": activity_class,
-                    "children": ds.Sequence(ds.Sequence(activity_class)),
-                    "added_fragments": ds.Sequence(ds.Value("string")),
-                    "active_fragments": ds.Sequence(ds.Value("string")),
-                },
-                "is_keyboard_deployed": ds.Value("bool"),
-                "request_id": ds.Value("string"),
+                "screenshots": ds.Sequence(ds.Image()),
+                "view_hierarchies": ds.Sequence(activity),
+                # 'gestures': {},
             }
         )
+
+    def load_examples(self, base_dir: pathlib.Path) -> List[pathlib.Path]:
+        task_dir = base_dir / "filtered_traces"
+        return [d for d in task_dir.iterdir() if d.is_dir()]
+
+    def generate_examples(self, examples: List[pathlib.Path]):
+        idx = 0
+        for trace_base_dir in examples:
+            for trace_dir in trace_base_dir.iterdir():
+                gestures_json = trace_dir / "gestures.json"
+                with gestures_json.open("r") as rf:
+                    gestures_dict = json.load(rf)
+                screenshots_dir = trace_dir / "screenshots"
+                screenshots = [
+                    self._load_image(f)
+                    for f in screenshots_dir.iterdir()
+                    if not f.name.startswith("._")
+                ]
+
+                view_hierarchies_dir = trace_dir / "view_hierarchies"
+                view_hierarchies_json_files = [
+                    f
+                    for f in view_hierarchies_dir.iterdir()
+                    if f.suffix == ".json" and not f.name.startswith("._")
+                ]
+                view_hierarchies_jsons = []
+                for json_file in view_hierarchies_json_files:
+                    with json_file.open("r") as rf:
+                        json_dict = json.load(rf)
+                        try:
+                            children = self._flatten_children(
+                                children=json_dict["activity"]["root"].pop("children")
+                            )
+                        except TypeError as err:
+                            logger.warning(err)
+                            continue
+
+                        json_dict["activity"]["children"] = [
+                            v for v in children.values()
+                        ]
+                        data = InteractionTracesData.from_dict(json_dict)
+                        view_hierarchies_jsons.append(asdict(data))
+
+                example = {
+                    "screenshots": screenshots,
+                    "view_hierarchies": view_hierarchies_jsons,
+                }
+                yield idx, example
+                idx += 1
+
+
+class UiScreenshotsAndViewHierarchiesProcessor(InteractionTracesProcessor):
+    def get_features(self) -> ds.Features:
+        activity_class = self.get_activity_class_features_dict()
+        activity = {
+            "screenshot": ds.Image(),
+            **self.get_activity_features_dict(activity_class),
+        }
+        features = ds.Features(features=activity)
         return features
 
-    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
+    def load_examples(self, base_dir: pathlib.Path) -> List[Any]:
         task_dir = base_dir / "combined"
         json_files = [f for f in task_dir.iterdir() if f.suffix == ".json"]
         return json_files
 
-    def generate_examples(self, samples: List[pathlib.Path]):
-        for i, json_file in enumerate(samples):
+    def generate_examples(self, examples: List[pathlib.Path]):
+        for i, json_file in enumerate(examples):
             with json_file.open("r") as rf:
                 json_dict = json.load(rf)
-                children = self.flatten_children(
+                children = self._flatten_children(
                     children=json_dict["activity"]["root"].pop("children")
                 )
                 json_dict["activity"]["children"] = [v for v in children.values()]
-                json_dict["screenshot"] = self.load_image(
+                json_dict["screenshot"] = self._load_image(
                     json_file.parent / f"{json_file.stem}.jpg"
                 )
                 data = UiScreenshotsAndViewHierarchiesData.from_dict(json_dict)
@@ -303,24 +448,36 @@ class UiScreenshotsAndViewHierarchiesProcessor(RicoTaskProcessor):
 
 class UiLayoutVectorsProcessor(RicoTaskProcessor):
     def get_features(self) -> ds.Features:
-        return ds.Features()
+        return ds.Features(
+            {"vector": ds.Sequence(ds.Value("float32")), "name": ds.Value("string")}
+        )
 
-    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
-        raise NotImplementedError
+    def _load_ui_vectors(self, file_path: pathlib.Path) -> np.ndarray:
+        logger.info(f"Load from {file_path}")
+        ui_vectors = np.load(file_path)
+        assert ui_vectors.shape[1] == 64
+        return ui_vectors
 
-    def generate_examples(self, samples: List[Any]):
-        raise NotImplementedError
+    def _load_ui_names(self, file_path: pathlib.Path) -> List[str]:
+        with file_path.open("r") as rf:
+            json_dict = json.load(rf)
+        return json_dict["ui_names"]
 
+    def load_examples(self, base_dir: pathlib.Path) -> List[UiLayoutVectorSample]:
+        task_dir = base_dir / "ui_layout_vectors"
+        ui_vectors = self._load_ui_vectors(file_path=task_dir / "ui_vectors.npy")
+        ui_names = self._load_ui_names(file_path=task_dir / "ui_names.json")
+        assert len(ui_vectors) == len(ui_names)
 
-class InteractionTracesProcessor(RicoTaskProcessor):
-    def get_features(self) -> ds.Features:
-        raise NotImplementedError
+        return [
+            {"vector": vector, "name": name}
+            for vector, name in zip(ui_vectors, ui_names)
+        ]
 
-    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
-        raise NotImplementedError
-
-    def generate_examples(self, samples: List[Any]):
-        raise NotImplementedError
+    def generate_examples(self, examples: List[UiLayoutVectorSample]):
+        for i, sample in enumerate(examples):
+            sample["vector"] = sample["vector"].tolist()
+            yield i, sample
 
 
 class AnimationsProcessor(RicoTaskProcessor):
@@ -385,25 +542,71 @@ class UiScreenshotsAndHierarchiesWithSemanticAnnotationsProcessor(RicoTaskProces
             }
         )
 
-    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
+    def load_examples(self, base_dir: pathlib.Path) -> List[Any]:
         task_dir = base_dir / "semantic_annotations"
         json_files = [f for f in task_dir.iterdir() if f.suffix == ".json"]
         return json_files
 
-    def generate_examples(self, samples: List[pathlib.Path]):
-        for i, json_file in enumerate(samples):
+    def generate_examples(self, examples: List[pathlib.Path]):
+        for i, json_file in enumerate(examples):
             with json_file.open("r") as rf:
                 json_dict = json.load(rf)
 
-                children = self.flatten_children(children=json_dict.pop("children"))
+                children = self._flatten_children(children=json_dict.pop("children"))
                 json_dict["children"] = [v for v in children.values()]
-                json_dict["screenshot"] = self.load_image(
+                json_dict["screenshot"] = self._load_image(
                     json_file.parent / f"{json_file.stem}.png"
                 )
                 data = UiScreenshotsAndHierarchiesWithSemanticAnnotationsData.from_dict(
                     json_dict
                 )
                 yield i, asdict(data)
+
+
+class UiMetadataProcessor(RicoMetadataProcessor):
+    def get_features(self) -> ds.Features:
+        return ds.Features(
+            {
+                "ui_number": ds.Value("int32"),
+                "app_package_name": ds.Value("string"),
+                "interaction_trace_number": ds.Value("string"),
+                "ui_number_in_trace": ds.Value("string"),
+            }
+        )
+
+    def load_samples(self, csv_file: pathlib.Path) -> List[Any]:
+        df = pd.read_csv(csv_file)  # 66261 col
+        df.columns = ["_".join(col.split()) for col in df.columns.str.lower()]
+        return df.to_dict(orient="records")
+
+    def split_generators(
+        self, csv_file: pathlib.Path, **kwargs
+    ) -> List[ds.SplitGenerator]:
+        metadata = self.load_samples(csv_file)
+        return [ds.SplitGenerator(name="metadata", gen_kwargs={"samples": metadata})]
+
+    def generate_examples(self, samples: List[Any]):
+        for i, metadata in enumerate(samples):
+            yield i, metadata
+
+
+class PlayStoreMetadataProcessor(RicoMetadataProcessor):
+    def get_features(self) -> ds.Features:
+        return ds.Features()
+
+    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
+        breakpoint()
+
+    def get_split_generators(self, base_dir: pathlib.Path) -> List[ds.SplitGenerator]:
+        breakpoint()
+
+    def split_generators(
+        self, csv_file: pathlib.Path, **kwargs
+    ) -> List[ds.SplitGenerator]:
+        breakpoint()
+
+    def generate_examples(self, samples: List[Any]):
+        breakpoint()
 
 
 @dataclass
@@ -459,10 +662,24 @@ class RicoDataset(ds.GeneratorBasedBuilder):
             data_url="https://storage.googleapis.com/crowdstf-rico-uiuc-4540/rico_dataset_v0.1/semantic_annotations.zip",
             processor=UiScreenshotsAndHierarchiesWithSemanticAnnotationsProcessor(),
         ),
+        RicoConfig(
+            name="ui-metadata",
+            version=VERSION,
+            description="Contains metadata about each UI screen: the name of the app it came from, the user interaction trace within that app.",
+            data_url="https://storage.googleapis.com/crowdstf-rico-uiuc-4540/rico_dataset_v0.1/ui_details.csv",
+            processor=UiMetadataProcessor(),
+        ),
+        RicoConfig(
+            name="play-store-metadata",
+            version=VERSION,
+            description="Contains metadata about the apps in the dataset including an app’s category, average rating, number of ratings, and number of downloads.",
+            data_url="https://storage.googleapis.com/crowdstf-rico-uiuc-4540/rico_dataset_v0.1/app_details.csv",
+            processor=PlayStoreMetadataProcessor(),
+        ),
     ]
 
     def _info(self) -> ds.DatasetInfo:
-        processor: RicoTaskProcessor = self.config.processor
+        processor: RicoProcessor = self.config.processor
         return ds.DatasetInfo(
             description=_DESCRIPTION,
             citation=_CITATION,
@@ -472,33 +689,15 @@ class RicoDataset(ds.GeneratorBasedBuilder):
         )
 
     def _split_generators(self, dl_manager: ds.DownloadManager):
-        task_base_dir = dl_manager.download_and_extract(self.config.data_url)
-
-        metadata_files = dl_manager.download_and_extract(_METADATA_URLS["metadata"])
-
-        processor: RicoTaskProcessor = self.config.processor
-        split_samples = processor.load_and_split_dataset(
-            base_dir=pathlib.Path(task_base_dir),
-            train_ratio=self.config.train_ratio,
-            validation_ratio=self.config.validation_ratio,
-            test_ratio=self.config.test_ratio,
+        config: RicoConfig = self.config
+        processor: RicoProcessor = config.processor
+        return processor.split_generators(
+            dl_manager.download_and_extract(self.config.data_url),
+            train_ratio=config.train_ratio,
+            validation_ratio=config.validation_ratio,
+            test_ratio=config.test_ratio,
         )
 
-        return [
-            ds.SplitGenerator(
-                name=ds.Split.TRAIN,  # type: ignore
-                gen_kwargs={"samples": split_samples["train"]},
-            ),
-            ds.SplitGenerator(
-                name=ds.Split.VALIDATION,  # type: ignore
-                gen_kwargs={"samples": split_samples["validation"]},
-            ),
-            ds.SplitGenerator(
-                name=ds.Split.TEST,  # type: ignore
-                gen_kwargs={"samples": split_samples["test"]},
-            ),
-        ]
-
-    def _generate_examples(self, samples: List[Any]):
+    def _generate_examples(self, **kwargs):
         processor: RicoTaskProcessor = self.config.processor
-        yield from processor.generate_examples(samples)
+        yield from processor.generate_examples(**kwargs)

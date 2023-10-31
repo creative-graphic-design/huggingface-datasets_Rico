@@ -10,11 +10,13 @@ def dataset_path() -> str:
 @pytest.mark.parametrize(
     argnames=("dataset_task"),
     argvalues=(
-        "ui-screenshots-and-view-hierarchies",
+        # "ui-screenshots-and-view-hierarchies",
         # "ui-layout-vectors",
-        # "interaction-traces",
+        "interaction-traces",
         # "animations",
-        "ui-screenshots-and-hierarchies-with-semantic-annotations",
+        # "ui-screenshots-and-hierarchies-with-semantic-annotations",
+        "ui-metadata",
+        "play-store-metadata",
     ),
 )
 def test_load_dataset(dataset_path: str, dataset_task: str):
