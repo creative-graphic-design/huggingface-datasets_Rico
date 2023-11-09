@@ -36,13 +36,6 @@ _HOMEPAGE = "http://www.interactionmining.org/rico.html"
 
 _LICENSE = "Unknown"
 
-# _METADATA_URLS = {
-#     "metadata": {
-#         "ui-metadata": ,
-#         "play-store-metadata": "",
-#     },
-# }
-
 
 def to_snake_case(name):
     name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
@@ -81,11 +74,11 @@ class RicoProcessor(object, metaclass=abc.ABCMeta):
         raise NotImplementedError
 
 
-class RicoTaskProcessor(RicoProcessor):
+class RicoTaskProcessor(RicoProcessor, metaclass=abc.ABCMeta):
     def _flatten_children(
         self,
         children,
-        children_id: Optional[str] = None,
+        children_id: Optional[int] = None,
         result: Optional[Dict[str, Any]] = None,
     ):
         result = result or defaultdict(list)
@@ -112,7 +105,14 @@ class RicoTaskProcessor(RicoProcessor):
         return result
 
     def _load_image(self, file_path: pathlib.Path) -> PilImage:
+        logger.debug(f"Load from {file_path}")
         return Image.open(file_path)
+
+    def _load_json(self, file_path: pathlib.Path) -> JsonDict:
+        logger.debug(f"Load from {file_path}")
+        with file_path.open("r") as rf:
+            json_dict = json.load(rf)
+        return json_dict
 
     def _split_dataset(
         self,
@@ -183,16 +183,19 @@ class RicoTaskProcessor(RicoProcessor):
             ),
         ]
 
+    @abc.abstractmethod
     def load_examples(self, base_dir: pathlib.Path) -> List[Any]:
-        return super().load_examples(base_dir=base_dir)
+        raise NotImplementedError
 
 
-class RicoMetadataProcessor(RicoProcessor):
+class RicoMetadataProcessor(RicoProcessor, metaclass=abc.ABCMeta):
+    @abc.abstractmethod
     def load_examples(self, csv_file: pathlib.Path) -> List[Any]:
-        return super().load_examples(csv_file=csv_file)
+        raise NotImplementedError
 
+    @abc.abstractmethod
     def split_generators(self, csv_file: pathlib.Path) -> List[ds.SplitGenerator]:
-        return super().split_generators(csv_file=csv_file)
+        raise NotImplementedError
 
 
 @dataclass
@@ -283,7 +286,7 @@ class InteractionTracesData(object):
 
 
 @dataclass
-class UiScreenshotsAndViewHierarchiesData(object):
+class UiScreenshotsAndViewHierarchiesData(InteractionTracesData):
     screenshot: PilImage
 
     @classmethod
@@ -312,6 +315,16 @@ class UiScreenshotsAndHierarchiesWithSemanticAnnotationsData(object):
             for ui_components in json_dict.pop("children")
         ]
         return cls(children=children, **json_dict)
+
+
+@dataclass
+class Gesture(object):
+    ui_id: int
+    xy: List[Tuple[float, float]]
+
+    @classmethod
+    def from_dict_to_gestures(cls, json_dict: JsonDict) -> List["Gesture"]:
+        return [Gesture(ui_id=int(k), xy=v) for k, v in json_dict.items()]
 
 
 class InteractionTracesProcessor(RicoTaskProcessor):
@@ -361,7 +374,12 @@ class InteractionTracesProcessor(RicoTaskProcessor):
             {
                 "screenshots": ds.Sequence(ds.Image()),
                 "view_hierarchies": ds.Sequence(activity),
-                # 'gestures': {},
+                "gestures": ds.Sequence(
+                    {
+                        "ui_id": ds.Value("int32"),
+                        "xy": ds.Sequence(ds.Sequence(ds.Value("float32"))),
+                    }
+                ),
             }
         )
 
@@ -373,9 +391,6 @@ class InteractionTracesProcessor(RicoTaskProcessor):
         idx = 0
         for trace_base_dir in examples:
             for trace_dir in trace_base_dir.iterdir():
-                gestures_json = trace_dir / "gestures.json"
-                with gestures_json.open("r") as rf:
-                    gestures_dict = json.load(rf)
                 screenshots_dir = trace_dir / "screenshots"
                 screenshots = [
                     self._load_image(f)
@@ -391,25 +406,28 @@ class InteractionTracesProcessor(RicoTaskProcessor):
                 ]
                 view_hierarchies_jsons = []
                 for json_file in view_hierarchies_json_files:
-                    with json_file.open("r") as rf:
-                        json_dict = json.load(rf)
-                        try:
-                            children = self._flatten_children(
-                                children=json_dict["activity"]["root"].pop("children")
-                            )
-                        except TypeError as err:
-                            logger.warning(err)
-                            continue
+                    json_dict = self._load_json(json_file)
+                    if json_dict is None:
+                        logger.warning(f"Invalid json file: {json_file}")
+                        continue
 
-                        json_dict["activity"]["children"] = [
-                            v for v in children.values()
-                        ]
-                        data = InteractionTracesData.from_dict(json_dict)
-                        view_hierarchies_jsons.append(asdict(data))
+                    children = self._flatten_children(
+                        children=json_dict["activity"]["root"].pop("children")
+                    )
+
+                    json_dict["activity"]["children"] = [v for v in children.values()]
+                    data = InteractionTracesData.from_dict(json_dict)
+                    view_hierarchies_jsons.append(asdict(data))
+
+                gestures_json = trace_dir / "gestures.json"
+                with gestures_json.open("r") as rf:
+                    gestures_dict = json.load(rf)
+                gestures = Gesture.from_dict_to_gestures(gestures_dict)
 
                 example = {
                     "screenshots": screenshots,
                     "view_hierarchies": view_hierarchies_jsons,
+                    "gestures": [asdict(gesture) for gesture in gestures],
                 }
                 yield idx, example
                 idx += 1
@@ -422,8 +440,7 @@ class UiScreenshotsAndViewHierarchiesProcessor(InteractionTracesProcessor):
             "screenshot": ds.Image(),
             **self.get_activity_features_dict(activity_class),
         }
-        features = ds.Features(features=activity)
-        return features
+        return ds.Features(activity)
 
     def load_examples(self, base_dir: pathlib.Path) -> List[Any]:
         task_dir = base_dir / "combined"
@@ -442,8 +459,8 @@ class UiScreenshotsAndViewHierarchiesProcessor(InteractionTracesProcessor):
                     json_file.parent / f"{json_file.stem}.jpg"
                 )
                 data = UiScreenshotsAndViewHierarchiesData.from_dict(json_dict)
-
-                yield i, asdict(data)
+                example = asdict(data)
+                yield i, example
 
 
 class UiLayoutVectorsProcessor(RicoTaskProcessor):
@@ -453,7 +470,7 @@ class UiLayoutVectorsProcessor(RicoTaskProcessor):
         )
 
     def _load_ui_vectors(self, file_path: pathlib.Path) -> np.ndarray:
-        logger.info(f"Load from {file_path}")
+        logger.debug(f"Load from {file_path}")
         ui_vectors = np.load(file_path)
         assert ui_vectors.shape[1] == 64
         return ui_vectors
@@ -484,10 +501,10 @@ class AnimationsProcessor(RicoTaskProcessor):
     def get_features(self) -> ds.Features:
         raise NotImplementedError
 
-    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
+    def load_examples(self, base_dir: pathlib.Path) -> List[Any]:
         raise NotImplementedError
 
-    def generate_examples(self, samples: List[Any]):
+    def generate_examples(self, examples: List[Any]):
         raise NotImplementedError
 
 
@@ -574,7 +591,7 @@ class UiMetadataProcessor(RicoMetadataProcessor):
             }
         )
 
-    def load_samples(self, csv_file: pathlib.Path) -> List[Any]:
+    def load_examples(self, csv_file: pathlib.Path) -> List[Any]:
         df = pd.read_csv(csv_file)  # 66261 col
         df.columns = ["_".join(col.split()) for col in df.columns.str.lower()]
         return df.to_dict(orient="records")
@@ -582,31 +599,117 @@ class UiMetadataProcessor(RicoMetadataProcessor):
     def split_generators(
         self, csv_file: pathlib.Path, **kwargs
     ) -> List[ds.SplitGenerator]:
-        metadata = self.load_samples(csv_file)
-        return [ds.SplitGenerator(name="metadata", gen_kwargs={"samples": metadata})]
+        metadata = self.load_examples(csv_file)
+        return [ds.SplitGenerator(name="metadata", gen_kwargs={"examples": metadata})]
 
-    def generate_examples(self, samples: List[Any]):
-        for i, metadata in enumerate(samples):
+    def generate_examples(self, examples: List[Any]):
+        for i, metadata in enumerate(examples):
             yield i, metadata
 
 
 class PlayStoreMetadataProcessor(RicoMetadataProcessor):
     def get_features(self) -> ds.Features:
-        return ds.Features()
+        return ds.Features(
+            {
+                "app_package_name": ds.Value("string"),
+                "play_store_name": ds.Value("string"),
+                "category": ds.ClassLabel(
+                    num_classes=27,
+                    names=[
+                        "Books & Reference",
+                        "Comics",
+                        "Health & Fitness",
+                        "Social",
+                        "Entertainment",
+                        "Weather",
+                        "Communication",
+                        "Sports",
+                        "News & Magazines",
+                        "Finance",
+                        "Shopping",
+                        "Education",
+                        "Travel & Local",
+                        "Business",
+                        "Medical",
+                        "Beauty",
+                        "Food & Drink",
+                        "Dating",
+                        "Auto & Vehicles",
+                        "Music & Audio",
+                        "House & Home",
+                        "Maps & Navigation",
+                        "Lifestyle",
+                        "Art & Design",
+                        "Parenting",
+                        "Events",
+                        "Video Players & Editors",
+                    ],
+                ),
+                "average_rating": ds.Value("float32"),
+                "number_of_ratings": ds.Value("int32"),
+                "number_of_downloads": ds.ClassLabel(
+                    num_classes=15,
+                    names=[
+                        "100,000 - 500,000",
+                        "10,000 - 50,000",
+                        "50,000,000 - 100,000,000",
+                        "50,000 - 100,000",
+                        "1,000,000 - 5,000,000",
+                        "5,000,000 - 10,000,000",
+                        "500,000 - 1,000,000",
+                        "1,000 - 5,000",
+                        "10,000,000 - 50,000,000",
+                        "5,000 - 10,000",
+                        "100,000,000 - 500,000,000",
+                        "500,000,000 - 1,000,000,000",
+                        "500 - 1,000",
+                        "1,000,000,000 - 5,000,000,000",
+                        "100 - 500",
+                    ],
+                ),
+                "date_updated": ds.Value("string"),
+                "icon_url": ds.Value("string"),
+            }
+        )
 
-    def load_samples(self, base_dir: pathlib.Path) -> List[Any]:
-        breakpoint()
+    def cleanup_metadata(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.assign(
+            number_of_downloads=df["number_of_downloads"].str.strip(),
+            number_of_ratings=df["number_of_ratings"]
+            .str.replace('"', "")
+            .str.strip()
+            .astype(int),
+        )
 
-    def get_split_generators(self, base_dir: pathlib.Path) -> List[ds.SplitGenerator]:
-        breakpoint()
+        def remove_noisy_data(df: pd.DataFrame) -> pd.DataFrame:
+            old_num = len(df)
+            df = df[
+                (df["category"] != "000 - 1")
+                | (df["number_of_downloads"] != "January 10, 2015")
+            ]
+            new_num = len(df)
+            assert new_num == old_num - 1
+            return df
+
+        df = remove_noisy_data(df)
+
+        return df
+
+    def load_examples(self, csv_file: pathlib.Path) -> List[Any]:
+        df = pd.read_csv(csv_file)
+        df.columns = ["_".join(col.split()) for col in df.columns.str.lower()]
+        df = self.cleanup_metadata(df)
+        return df.to_dict(orient="records")
 
     def split_generators(
         self, csv_file: pathlib.Path, **kwargs
     ) -> List[ds.SplitGenerator]:
-        breakpoint()
+        metadata = self.load_examples(csv_file)
+        return [ds.SplitGenerator(name="metadata", gen_kwargs={"examples": metadata})]
 
-    def generate_examples(self, samples: List[Any]):
-        breakpoint()
+    def generate_examples(self, examples: List[Any]):
+        for i, metadata in enumerate(examples):
+            yield i, metadata
 
 
 @dataclass
@@ -616,7 +719,7 @@ class RicoConfig(ds.BuilderConfig):
     test_ratio: float = 0.10
     random_state: int = 0
     data_url: Optional[str] = None
-    processor: Optional[RicoTaskProcessor] = None
+    processor: Optional[RicoProcessor] = None
 
     def __post_init__(self):
         assert self.data_url is not None
@@ -690,7 +793,9 @@ class RicoDataset(ds.GeneratorBasedBuilder):
 
     def _split_generators(self, dl_manager: ds.DownloadManager):
         config: RicoConfig = self.config
+        assert config.processor is not None
         processor: RicoProcessor = config.processor
+
         return processor.split_generators(
             dl_manager.download_and_extract(self.config.data_url),
             train_ratio=config.train_ratio,
@@ -699,5 +804,7 @@ class RicoDataset(ds.GeneratorBasedBuilder):
         )
 
     def _generate_examples(self, **kwargs):
-        processor: RicoTaskProcessor = self.config.processor
+        config: RicoConfig = self.config
+        assert config.processor is not None
+        processor: RicoProcessor = config.processor
         yield from processor.generate_examples(**kwargs)
