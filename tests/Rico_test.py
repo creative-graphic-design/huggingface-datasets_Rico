@@ -55,7 +55,7 @@ def test_load_dataset(
     argnames=("dataset_task", "expected_num_data"),
     argvalues=(
         ("ui-metadata", 66261),
-        ("play-store-metadata", 9384 - 1),
+        ("play-store-metadata", 9384 - 1),  # There is one invalid data
     ),
 )
 def test_load_metadata(dataset_path: str, dataset_task: str, expected_num_data: int):
