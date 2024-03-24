@@ -81,5 +81,4 @@ def test_load_metadata(
 ):
     metadata = ds.load_dataset(path=dataset_path, name=dataset_task)
     assert metadata["metadata"].num_rows == expected_num_data
-
-    metadata.push_to_hub(repo_id=repo_id)
+    metadata.push_to_hub(repo_id=repo_id, config_name=dataset_task)
