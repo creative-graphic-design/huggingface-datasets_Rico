@@ -5,8 +5,23 @@ import pytest
 
 
 @pytest.fixture
-def dataset_path() -> str:
-    return "Rico.py"
+def dataset_name() -> str:
+    return "Rico"
+
+
+@pytest.fixture
+def dataset_path(dataset_name: str) -> str:
+    return f"{dataset_name}.py"
+
+
+@pytest.fixture
+def org_name() -> str:
+    return "creative-graphic-design"
+
+
+@pytest.fixture
+def repo_id(org_name: str, dataset_name: str) -> str:
+    return f"{org_name}/{dataset_name}"
 
 
 @pytest.mark.skipif(
@@ -37,11 +52,14 @@ def test_load_dataset(
     expected_num_train: int,
     expected_num_valid: int,
     expected_num_test: int,
+    repo_id: str,
 ):
     dataset = ds.load_dataset(path=dataset_path, name=dataset_task)
     assert dataset["train"].num_rows == expected_num_train
     assert dataset["validation"].num_rows == expected_num_valid
     assert dataset["test"].num_rows == expected_num_test
+
+    dataset.push_to_hub(repo_id=repo_id, config_name=dataset_task)
 
 
 @pytest.mark.skipif(
@@ -58,6 +76,9 @@ def test_load_dataset(
         ("play-store-metadata", 9384 - 1),  # There is one invalid data
     ),
 )
-def test_load_metadata(dataset_path: str, dataset_task: str, expected_num_data: int):
+def test_load_metadata(
+    dataset_path: str, dataset_task: str, expected_num_data: int, repo_id: str
+):
     metadata = ds.load_dataset(path=dataset_path, name=dataset_task)
     assert metadata["metadata"].num_rows == expected_num_data
+    metadata.push_to_hub(repo_id=repo_id, config_name=dataset_task)
