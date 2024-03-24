@@ -59,7 +59,7 @@ def test_load_dataset(
     assert dataset["validation"].num_rows == expected_num_valid
     assert dataset["test"].num_rows == expected_num_test
 
-    dataset.push_to_hub(repo_id=repo_id)
+    dataset.push_to_hub(repo_id=repo_id, config_name=dataset_task)
 
 
 @pytest.mark.skipif(
